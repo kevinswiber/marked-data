@@ -744,3 +744,249 @@ data:
         )
     );
 }
+
+#[test]
+fn flow_style_mapping_spans() {
+    // Create a YAML document with flow style mappings
+    let yaml = r#"---
+root: { key1: value1, key2: value2 }
+nested:
+  level1: { inner1: val1, inner2: val2 }
+  level2:
+    deep: { a: 1, b: { c: 3, d: 4 }, e: 5 }
+sequence_flow: [1, 2, { key: value }]
+"#;
+
+    println!("\n=== YAML Document ===\n{}", yaml);
+
+    // Parse the YAML document
+    let node = parse_yaml(0, yaml).unwrap();
+    let root = node.as_mapping().unwrap();
+
+    // Check that the root mapping has a valid span
+    assert!(root.span().start().is_some());
+    assert!(root.span().end().is_some());
+
+    // Check the root flow-style mapping
+    let flow_mapping = root.get_mapping("root").unwrap();
+    println!("\n=== Flow Mapping Start ===");
+    println!("Expected: line 2, column 7"); // Points to the '{' character
+    println!(
+        "Actual: line {}, column {}",
+        flow_mapping.span().start().unwrap().line(),
+        flow_mapping.span().start().unwrap().column()
+    );
+    assert_eq!(flow_mapping.span().start().unwrap().line(), 2);
+    assert_eq!(flow_mapping.span().start().unwrap().column(), 7);
+    println!(
+        "{}",
+        visualize_position(
+            yaml,
+            flow_mapping.span().start().unwrap().line(),
+            flow_mapping.span().start().unwrap().column()
+        )
+    );
+
+    // Check the end position of the flow mapping too
+    println!("\n=== Flow Mapping End ===");
+    println!("Expected: line 2, column 36"); // Points to the '}' character
+    println!(
+        "Actual: line {}, column {}",
+        flow_mapping.span().end().unwrap().line(),
+        flow_mapping.span().end().unwrap().column()
+    );
+    assert_eq!(flow_mapping.span().end().unwrap().line(), 2);
+    assert_eq!(flow_mapping.span().end().unwrap().column(), 36);
+    println!(
+        "{}",
+        visualize_position(
+            yaml,
+            flow_mapping.span().end().unwrap().line(),
+            flow_mapping.span().end().unwrap().column()
+        )
+    );
+
+    // Check keys exist in the flow mapping
+    assert!(flow_mapping.contains_key("key1"));
+    assert!(flow_mapping.contains_key("key2"));
+
+    // Get values and check position
+    let value1 = flow_mapping.get_scalar("key1").unwrap();
+    assert_eq!(value1.as_str(), "value1");
+    println!("\n=== 'value1' in flow mapping Start ===");
+    println!("Expected: line 2, column 15");
+    println!(
+        "Actual: line {}, column {}",
+        value1.span().start().unwrap().line(),
+        value1.span().start().unwrap().column()
+    );
+    assert_eq!(value1.span().start().unwrap().line(), 2);
+    assert_eq!(value1.span().start().unwrap().column(), 15);
+    println!(
+        "{}",
+        visualize_position(
+            yaml,
+            value1.span().start().unwrap().line(),
+            value1.span().start().unwrap().column()
+        )
+    );
+
+    // Check nested level1 flow mapping
+    let nested = root.get_mapping("nested").unwrap();
+    let level1 = nested.get_mapping("level1").unwrap();
+    println!("\n=== 'level1' Flow Mapping Start ===");
+    println!("Expected: line 4, column 11"); // Points to the '{' character
+    println!(
+        "Actual: line {}, column {}",
+        level1.span().start().unwrap().line(),
+        level1.span().start().unwrap().column()
+    );
+    assert_eq!(level1.span().start().unwrap().line(), 4);
+    assert_eq!(level1.span().start().unwrap().column(), 11);
+    println!(
+        "{}",
+        visualize_position(
+            yaml,
+            level1.span().start().unwrap().line(),
+            level1.span().start().unwrap().column()
+        )
+    );
+
+    // Check the end position of the level1 flow mapping
+    println!("\n=== 'level1' Flow Mapping End ===");
+    println!("Expected: line 4, column 40"); // Points to the '}' character
+    println!(
+        "Actual: line {}, column {}",
+        level1.span().end().unwrap().line(),
+        level1.span().end().unwrap().column()
+    );
+    assert_eq!(level1.span().end().unwrap().line(), 4);
+    assert_eq!(level1.span().end().unwrap().column(), 40);
+    println!(
+        "{}",
+        visualize_position(
+            yaml,
+            level1.span().end().unwrap().line(),
+            level1.span().end().unwrap().column()
+        )
+    );
+
+    // Check more deeply nested flow mapping
+    let level2 = nested.get_mapping("level2").unwrap();
+    let deep = level2.get_mapping("deep").unwrap();
+    println!("\n=== 'deep' Flow Mapping Start ===");
+    println!("Expected: line 6, column 11"); // Points to the '{' character
+    println!(
+        "Actual: line {}, column {}",
+        deep.span().start().unwrap().line(),
+        deep.span().start().unwrap().column()
+    );
+    assert_eq!(deep.span().start().unwrap().line(), 6);
+    assert_eq!(deep.span().start().unwrap().column(), 11);
+    println!(
+        "{}",
+        visualize_position(
+            yaml,
+            deep.span().start().unwrap().line(),
+            deep.span().start().unwrap().column()
+        )
+    );
+
+    // Check nested mapping inside deep flow mapping
+    let b_mapping = deep.get_mapping("b").unwrap();
+    println!("\n=== 'b' Flow Mapping Start ===");
+    println!("Expected: line 6, column 22"); // Points to the '{' character
+    println!(
+        "Actual: line {}, column {}",
+        b_mapping.span().start().unwrap().line(),
+        b_mapping.span().start().unwrap().column()
+    );
+    assert_eq!(b_mapping.span().start().unwrap().line(), 6);
+    assert_eq!(b_mapping.span().start().unwrap().column(), 22);
+    println!(
+        "{}",
+        visualize_position(
+            yaml,
+            b_mapping.span().start().unwrap().line(),
+            b_mapping.span().start().unwrap().column()
+        )
+    );
+
+    // Check the b mapping end position
+    println!("\n=== 'b' Flow Mapping End ===");
+    println!("Expected: line 6, column 35"); // Points to the '}' character
+    println!(
+        "Actual: line {}, column {}",
+        b_mapping.span().end().unwrap().line(),
+        b_mapping.span().end().unwrap().column()
+    );
+    assert_eq!(b_mapping.span().end().unwrap().line(), 6);
+    assert_eq!(b_mapping.span().end().unwrap().column(), 35);
+    println!(
+        "{}",
+        visualize_position(
+            yaml,
+            b_mapping.span().end().unwrap().line(),
+            b_mapping.span().end().unwrap().column()
+        )
+    );
+
+    // Check flow sequence
+    let sequence_flow = root.get_sequence("sequence_flow").unwrap();
+    println!("\n=== 'sequence_flow' Flow Sequence Start ===");
+    println!("Expected: line 7, column 16"); // Points to the '[' character
+    println!(
+        "Actual: line {}, column {}",
+        sequence_flow.span().start().unwrap().line(),
+        sequence_flow.span().start().unwrap().column()
+    );
+    assert_eq!(sequence_flow.span().start().unwrap().line(), 7);
+    assert_eq!(sequence_flow.span().start().unwrap().column(), 16);
+    println!(
+        "{}",
+        visualize_position(
+            yaml,
+            sequence_flow.span().start().unwrap().line(),
+            sequence_flow.span().start().unwrap().column()
+        )
+    );
+
+    // Check mapping inside flow sequence
+    let map_in_sequence = sequence_flow.get_mapping(2).unwrap();
+    println!("\n=== Mapping in Flow Sequence Start ===");
+    println!("Expected: line 7, column 23"); // Points to the '{' character
+    println!(
+        "Actual: line {}, column {}",
+        map_in_sequence.span().start().unwrap().line(),
+        map_in_sequence.span().start().unwrap().column()
+    );
+    assert_eq!(map_in_sequence.span().start().unwrap().line(), 7);
+    assert_eq!(map_in_sequence.span().start().unwrap().column(), 23);
+    println!(
+        "{}",
+        visualize_position(
+            yaml,
+            map_in_sequence.span().start().unwrap().line(),
+            map_in_sequence.span().start().unwrap().column()
+        )
+    );
+
+    // Check the mapping end position
+    println!("\n=== Mapping in Flow Sequence End ===");
+    println!("Expected: line 7, column 36"); // Points to the '}' character
+    println!(
+        "Actual: line {}, column {}",
+        map_in_sequence.span().end().unwrap().line(),
+        map_in_sequence.span().end().unwrap().column()
+    );
+    assert_eq!(map_in_sequence.span().end().unwrap().line(), 7);
+    assert_eq!(map_in_sequence.span().end().unwrap().column(), 36);
+    println!(
+        "{}",
+        visualize_position(
+            yaml,
+            map_in_sequence.span().end().unwrap().line(),
+            map_in_sequence.span().end().unwrap().column()
+        )
+    );
+}
