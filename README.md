@@ -22,3 +22,29 @@ to use `marked-yaml` with your existing `serde` applications, you can enable the
 `serde` feature, and if you want the errors produced by the `marked-yaml`
 deserializer to include nice paths to any problem, along with ensuring the marker
 for the problem area is populated in any errors, use the `serde-path` feature.
+
+### Fork Enhancements (`bangarang` branch)
+
+This fork enhances the original marked-data project with improved position tracking and flow mapping support in the `marked-yaml` library:
+
+1. **Enhanced Flow Mapping Position Tracking**
+   - Added precise tracking of flow mapping opening and closing brace positions
+   - Improved position accuracy for flow-style YAML mappings (using `{}` syntax)
+   - Added support for nested flow mappings with accurate position information
+
+2. **Test Suite Improvements**
+   - Added comprehensive test suite for flow-style mapping position tracking
+   - Added visualization helpers for position debugging
+   - Added tests for complex document structures with mixed block and flow styles
+
+3. **Developer Notes**
+   - Position tracking is now more accurate for flow-style mappings
+   - Simple adjustments are made for flow mapping opening braces (adjusting position by -2 columns)
+   - Some complex cases may still have limitations pending further parser improvements
+
+These enhancements are particularly useful for:
+- IDEs and editors that need precise position information for code navigation
+- Tools that provide error messages or diagnostics for YAML documents
+- Applications that need to map YAML structures back to their source positions
+
+Note: While most position tracking works well, some complex cases with flow-style mappings may still have limitations that will be addressed in future updates.
