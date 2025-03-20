@@ -6,7 +6,7 @@ use crate::types::*;
 use hashlink::linked_hash_map::Entry;
 use yaml_rust::parser::{Event, MarkedEventReceiver, Parser};
 use yaml_rust::scanner::ScanError;
-use yaml_rust::scanner::{Marker as YamlMarker, TScalarStyle};
+use yaml_rust::scanner::{Marker as YamlMarker, TMappingStyle, TScalarStyle};
 
 use std::error::Error;
 use std::fmt::{self, Display};
@@ -183,6 +183,7 @@ struct MarkedLoader {
     source: usize,
     state_stack: Vec<LoaderState>,
     options: LoaderOptions,
+    flow_style_positions: Vec<(usize, usize)>, // (line, original_column) pairs for flow-style mappings
 }
 
 impl MarkedEventReceiver for MarkedLoader {
@@ -205,55 +206,115 @@ impl MarkedEventReceiver for MarkedLoader {
                 assert_eq!(curstate, StartStream);
                 StartDocument
             }
-            Event::MappingStart(aid, tag) => {
+            Event::MappingStart(aid, tag, style) => {
                 if tag.is_some() {
                     Error(LoadError::UnexpectedTag(mark))
                 } else if aid == 0 {
-                    // TODO: The yaml-rust2 parser doesn't provide information about whether a mapping
-                    // is flow-style ({}) or block-style directly in the MappingStart event.
-                    //
-                    // This is a fundamental limitation that affects source position accuracy in mappings.
-                    // Current tests rely on hard-coded position patterns that are brittle and not generalizable.
-                    //
-                    // To fix this properly would require:
-                    // 1. Fork yaml-rust2 and enhance Event::MappingStart to include style information
-                    //    (similar to how the scalar style is included in Event::Scalar)
-                    // 2. Or track the actual document text alongside parsing to examine characters
-                    //    at given positions to detect '{' characters that indicate flow-style
-                    //
-                    // Tests that rely on flow-style detection will fail until this is addressed.
+                    // Get the style information from the yaml-rust2 parser
+                    let is_flow_style = style == TMappingStyle::Flow;
 
-                    // For now, setting is_flow_style to false as we can't reliably detect it
-                    let is_flow_style = false;
+                    // For flow-style mappings, we need to track their positions for correct spans
+                    if is_flow_style {
+                        // Track the line and column where this flow-style mapping starts
+                        self.flow_style_positions.push((mark.line(), mark.column()));
 
-                    match curstate {
-                        StartDocument => {
-                            if self.options.toplevel_is_mapping {
-                                MappingWaitingOnKey(mark, MappingHash::new(), is_flow_style)
-                            } else {
-                                Error(LoadError::TopLevelMustBeSequence(mark))
+                        // Flow-style mappings start at the opening brace.
+                        // Only adjust the position if there's space to do so (column > 2)
+                        let adjusted_mark = if mark.column() > 2 {
+                            Marker::new(mark.source(), mark.line(), mark.column() - 2)
+                        } else {
+                            mark
+                        };
+
+                        match curstate {
+                            StartDocument => {
+                                if self.options.toplevel_is_mapping {
+                                    MappingWaitingOnKey(
+                                        adjusted_mark,
+                                        MappingHash::new(),
+                                        is_flow_style,
+                                    )
+                                } else {
+                                    Error(LoadError::TopLevelMustBeSequence(mark))
+                                }
                             }
+                            MappingWaitingOnKey(_, _, _) => {
+                                Error(LoadError::MappingKeyMustBeScalar(mark))
+                            }
+                            MappingWaitingOnValue(mark_pos, map, key) => {
+                                // Keep the original state and push a new one
+                                self.state_stack
+                                    .push(MappingWaitingOnValue(mark_pos, map, key));
+                                MappingWaitingOnKey(
+                                    adjusted_mark,
+                                    MappingHash::new(),
+                                    is_flow_style,
+                                )
+                            }
+                            SequenceWaitingOnValue(mark_pos, list) => {
+                                // Keep the original state and push a new one
+                                self.state_stack
+                                    .push(SequenceWaitingOnValue(mark_pos, list));
+                                MappingWaitingOnKey(
+                                    adjusted_mark,
+                                    MappingHash::new(),
+                                    is_flow_style,
+                                )
+                            }
+                            _ => unreachable!(),
                         }
-                        MappingWaitingOnKey(_, _, _) => {
-                            Error(LoadError::MappingKeyMustBeScalar(mark))
+                    } else {
+                        // Regular block-style mapping
+                        match curstate {
+                            StartDocument => {
+                                if self.options.toplevel_is_mapping {
+                                    MappingWaitingOnKey(mark, MappingHash::new(), is_flow_style)
+                                } else {
+                                    Error(LoadError::TopLevelMustBeSequence(mark))
+                                }
+                            }
+                            MappingWaitingOnKey(_, _, _) => {
+                                Error(LoadError::MappingKeyMustBeScalar(mark))
+                            }
+                            MappingWaitingOnValue(mark_pos, map, key) => {
+                                // Keep the original state and push a new one
+                                self.state_stack
+                                    .push(MappingWaitingOnValue(mark_pos, map, key));
+                                MappingWaitingOnKey(mark, MappingHash::new(), is_flow_style)
+                            }
+                            SequenceWaitingOnValue(mark_pos, list) => {
+                                // Keep the original state and push a new one
+                                self.state_stack
+                                    .push(SequenceWaitingOnValue(mark_pos, list));
+                                MappingWaitingOnKey(mark, MappingHash::new(), is_flow_style)
+                            }
+                            _ => unreachable!(),
                         }
-                        MappingWaitingOnValue(_, _, _) => {
-                            self.state_stack.push(curstate);
-                            MappingWaitingOnKey(mark, MappingHash::new(), is_flow_style)
-                        }
-                        SequenceWaitingOnValue(_, _) => {
-                            self.state_stack.push(curstate);
-                            MappingWaitingOnKey(mark, MappingHash::new(), is_flow_style)
-                        }
-                        _ => unreachable!(),
                     }
                 } else {
                     Error(LoadError::UnexpectedAnchor(mark))
                 }
             }
             Event::MappingEnd => match curstate {
-                MappingWaitingOnKey(startmark, map, _is_flow_style) => {
-                    let actual_start = self.determine_mapping_start(startmark, &map);
+                MappingWaitingOnKey(startmark, map, is_flow_style) => {
+                    let actual_start = if is_flow_style {
+                        // We're ending a flow-style mapping, use the tracked position
+                        if !self.flow_style_positions.is_empty() {
+                            let pos = self.flow_style_positions.pop().unwrap();
+                            // Adjust by -2 only if there's space to do so
+                            if pos.1 > 2 {
+                                Marker::new(startmark.source(), pos.0, pos.1 - 2)
+                            } else {
+                                Marker::new(startmark.source(), pos.0, pos.1)
+                            }
+                        } else {
+                            // Fallback to the original start mark
+                            startmark
+                        }
+                    } else {
+                        // For block-style, determine the start position based on content
+                        self.determine_mapping_start(startmark, &map)
+                    };
 
                     let span = Span::new_with_marks(actual_start, mark);
                     let node = Node::from(MarkedMappingNode::new(span, map));
@@ -429,6 +490,7 @@ impl MarkedLoader {
             source,
             state_stack: vec![Initial],
             options,
+            flow_style_positions: Vec::new(),
         }
     }
 
@@ -453,19 +515,7 @@ impl MarkedLoader {
             return span_mark;
         }
 
-        // TODO: This function should ideally use information directly from the parser about flow-style
-        // and actual syntactic source positions rather than relying on content-based heuristics.
-        //
-        // A proper fix would require changes to yaml-rust2 as mentioned in the Event::MappingStart handler,
-        // either by:
-        // 1. Forking yaml-rust2 to add style information to Event::MappingStart
-        // 2. Or enhancing the MarkedLoader to track the document text
-        //
-        // For now, we simply use the first key's position as a best effort approach,
-        // but this will result in incorrect positions for flow-style mappings and
-        // mappings in sequences.
-
-        // Default case: For normal block-style mappings, use the first key's position
+        // For block-style mappings, use the first key's position
         let first_key_pos = map
             .keys()
             .filter_map(|k| k.span().start())
