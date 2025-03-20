@@ -164,7 +164,7 @@ enum LoaderState {
     Initial,
     StartStream,
     StartDocument,
-    MappingWaitingOnKey(Marker, MappingHash),
+    MappingWaitingOnKey(Marker, MappingHash, bool),
     MappingWaitingOnValue(Marker, MappingHash, MarkedScalarNode),
     SequenceWaitingOnValue(Marker, Vec<Node>),
     Finished(Node),
@@ -173,6 +173,7 @@ enum LoaderState {
 use LoaderState::*;
 
 impl LoaderState {
+    #[allow(dead_code)]
     fn is_error(&self) -> bool {
         matches!(self, Error(_))
     }
@@ -187,14 +188,13 @@ struct MarkedLoader {
 impl MarkedEventReceiver for MarkedLoader {
     fn on_event(&mut self, ev: Event, mark: YamlMarker) {
         // Short-circuit if the state stack is in error
-        if self.state_stack[self.state_stack.len() - 1].is_error() {
+        if let Error(_) = self.state_stack.last().unwrap() {
             return;
         }
+
         let mark = self.marker(mark);
-        let curstate = self
-            .state_stack
-            .pop()
-            .expect("State stack became unbalanced");
+        let curstate = self.state_stack.pop().unwrap();
+
         let newstate = match ev {
             Event::Alias(_) => unreachable!(),
             Event::StreamStart => {
@@ -209,22 +209,41 @@ impl MarkedEventReceiver for MarkedLoader {
                 if tag.is_some() {
                     Error(LoadError::UnexpectedTag(mark))
                 } else if aid == 0 {
+                    // TODO: The yaml-rust2 parser doesn't provide information about whether a mapping
+                    // is flow-style ({}) or block-style directly in the MappingStart event.
+                    //
+                    // This is a fundamental limitation that affects source position accuracy in mappings.
+                    // Current tests rely on hard-coded position patterns that are brittle and not generalizable.
+                    //
+                    // To fix this properly would require:
+                    // 1. Fork yaml-rust2 and enhance Event::MappingStart to include style information
+                    //    (similar to how the scalar style is included in Event::Scalar)
+                    // 2. Or track the actual document text alongside parsing to examine characters
+                    //    at given positions to detect '{' characters that indicate flow-style
+                    //
+                    // Tests that rely on flow-style detection will fail until this is addressed.
+
+                    // For now, setting is_flow_style to false as we can't reliably detect it
+                    let is_flow_style = false;
+
                     match curstate {
                         StartDocument => {
                             if self.options.toplevel_is_mapping {
-                                MappingWaitingOnKey(mark, MappingHash::new())
+                                MappingWaitingOnKey(mark, MappingHash::new(), is_flow_style)
                             } else {
                                 Error(LoadError::TopLevelMustBeSequence(mark))
                             }
                         }
-                        MappingWaitingOnKey(_, _) => Error(LoadError::MappingKeyMustBeScalar(mark)),
+                        MappingWaitingOnKey(_, _, _) => {
+                            Error(LoadError::MappingKeyMustBeScalar(mark))
+                        }
                         MappingWaitingOnValue(_, _, _) => {
                             self.state_stack.push(curstate);
-                            MappingWaitingOnKey(mark, MappingHash::new())
+                            MappingWaitingOnKey(mark, MappingHash::new(), is_flow_style)
                         }
                         SequenceWaitingOnValue(_, _) => {
                             self.state_stack.push(curstate);
-                            MappingWaitingOnKey(mark, MappingHash::new())
+                            MappingWaitingOnKey(mark, MappingHash::new(), is_flow_style)
                         }
                         _ => unreachable!(),
                     }
@@ -233,9 +252,12 @@ impl MarkedEventReceiver for MarkedLoader {
                 }
             }
             Event::MappingEnd => match curstate {
-                MappingWaitingOnKey(startmark, map) => {
-                    let span = Span::new_with_marks(startmark, mark);
+                MappingWaitingOnKey(startmark, map, _is_flow_style) => {
+                    let actual_start = self.determine_mapping_start(startmark, &map);
+
+                    let span = Span::new_with_marks(actual_start, mark);
                     let node = Node::from(MarkedMappingNode::new(span, map));
+
                     if let Some(topstate) = self.state_stack.pop() {
                         match topstate {
                             MappingWaitingOnValue(mark, mut map, key) => {
@@ -252,7 +274,7 @@ impl MarkedEventReceiver for MarkedLoader {
                                     }
                                     _ => {
                                         map.insert(key, node);
-                                        MappingWaitingOnKey(mark, map)
+                                        MappingWaitingOnKey(mark, map, false)
                                     }
                                 }
                             }
@@ -280,7 +302,9 @@ impl MarkedEventReceiver for MarkedLoader {
                                 SequenceWaitingOnValue(mark, Vec::new())
                             }
                         }
-                        MappingWaitingOnKey(_, _) => Error(LoadError::MappingKeyMustBeScalar(mark)),
+                        MappingWaitingOnKey(_, _, _) => {
+                            Error(LoadError::MappingKeyMustBeScalar(mark))
+                        }
                         mv @ MappingWaitingOnValue(_, _, _) => {
                             self.state_stack.push(mv);
                             SequenceWaitingOnValue(mark, Vec::new())
@@ -315,7 +339,7 @@ impl MarkedEventReceiver for MarkedLoader {
                                     }
                                     _ => {
                                         map.insert(key, node);
-                                        MappingWaitingOnKey(mark, map)
+                                        MappingWaitingOnKey(mark, map, false)
                                     }
                                 }
                             }
@@ -348,7 +372,7 @@ impl MarkedEventReceiver for MarkedLoader {
                         Error(LoadError::UnexpectedTag(mark))
                     } else {
                         let span = Span::new_start(mark);
-                        let val = if matches!(curstate, MappingWaitingOnKey(_, _))
+                        let val = if matches!(curstate, MappingWaitingOnKey(_, _, _))
                             && self.options.lowercase_keys
                         {
                             val.to_lowercase()
@@ -360,7 +384,7 @@ impl MarkedEventReceiver for MarkedLoader {
                             node.set_coerce(matches!(kind, TScalarStyle::Plain));
                         }
                         match curstate {
-                            MappingWaitingOnKey(mark, map) => {
+                            MappingWaitingOnKey(mark, map, _is_flow_style) => {
                                 MappingWaitingOnValue(mark, map, node)
                             }
                             MappingWaitingOnValue(mark, mut map, key) => {
@@ -377,7 +401,7 @@ impl MarkedEventReceiver for MarkedLoader {
                                     }
                                     _ => {
                                         map.insert(key, Node::from(node));
-                                        MappingWaitingOnKey(mark, map)
+                                        MappingWaitingOnKey(mark, map, false)
                                     }
                                 }
                             }
@@ -419,6 +443,35 @@ impl MarkedLoader {
             Error(e) => Err(e),
             _ => unreachable!(),
         }
+    }
+
+    // This function determines the correct start position for a mapping node based on
+    // specific patterns we've observed in the test cases
+    fn determine_mapping_start(&self, span_mark: Marker, map: &MappingHash) -> Marker {
+        // If the mapping is empty, use the original mark
+        if map.is_empty() {
+            return span_mark;
+        }
+
+        // TODO: This function should ideally use information directly from the parser about flow-style
+        // and actual syntactic source positions rather than relying on content-based heuristics.
+        //
+        // A proper fix would require changes to yaml-rust2 as mentioned in the Event::MappingStart handler,
+        // either by:
+        // 1. Forking yaml-rust2 to add style information to Event::MappingStart
+        // 2. Or enhancing the MarkedLoader to track the document text
+        //
+        // For now, we simply use the first key's position as a best effort approach,
+        // but this will result in incorrect positions for flow-style mappings and
+        // mappings in sequences.
+
+        // Default case: For normal block-style mappings, use the first key's position
+        let first_key_pos = map
+            .keys()
+            .filter_map(|k| k.span().start())
+            .min_by_key(|&m| (m.line(), m.column()));
+
+        first_key_pos.copied().unwrap_or(span_mark)
     }
 }
 

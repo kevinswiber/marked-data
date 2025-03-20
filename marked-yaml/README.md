@@ -49,3 +49,35 @@ additional constraints:
 
 In addition, you can convert between `marked_yaml::Node` and `yaml_rust::Yaml`
 though doing so will not give you any useful markers.
+
+# Known Limitations
+
+## Flow-Style Mapping Detection
+
+The `yaml-rust2` library does not provide information about whether a mapping is flow-style (using braces `{}`) or block-style in its parser events. This limitation affects source position accuracy for mappings in Marked YAML.
+
+For example, in YAML like:
+
+```yaml
+root: { key1: value1, key2: value2 }
+```
+
+The parser does not indicate that the mapping is flow-style, and the position information does not accurately point to the opening brace `{`. This affects how span information is reported for flow-style mappings.
+
+Currently, some tests that validate position accuracy for flow-style mappings and mappings within sequences may fail due to this limitation.
+
+## Potential Solutions
+
+To properly fix these limitations, one of the following approaches would be needed:
+
+1. Fork `yaml-rust2` and enhance the `Event::MappingStart` to include style information (similar to how scalar style is included in `Event::Scalar`)
+
+2. Enhance the `MarkedLoader` to track the document text alongside parsing to examine characters at specific positions
+
+## Future Work
+
+We plan to address these limitations in a future release. If you find cases where span information is inaccurate, please report them as issues in the repository.
+
+For now, applications should be aware that:
+- Flow-style mapping spans may not precisely point to the opening brace
+- Mappings in sequences may have position information that points to sequence markers rather than the mapping start

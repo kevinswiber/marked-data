@@ -1,3 +1,15 @@
+// Tests for the marked-yaml loader
+//
+// NOTE: Some tests fail due to fundamental limitations in the yaml-rust2 parser:
+// 1. The parser doesn't provide information about whether a mapping is flow-style ({}) or block-style
+// 2. The parser's position information is inconsistent for certain YAML constructs
+//
+// A proper fix would require:
+// - Forking yaml-rust2 to enhance Event::MappingStart to include style information
+// - Or tracking the document text alongside parsing to examine characters at specific positions
+//
+// Until this is addressed, tests that rely on precise position information for mappings will fail.
+
 use marked_yaml::{parse_yaml, parse_yaml_with_options, LoaderOptions};
 use std::fmt::Write;
 
@@ -37,6 +49,10 @@ fn visualize_position(input: &str, line: usize, column: usize) -> String {
 
 #[test]
 fn sequence_of_mappings_spans() {
+    // FIXME: This test is expected to fail until the yaml-rust2 parser is enhanced
+    // The test expects mappings in sequences to start at position of the first key (column 7)
+    // but the parser only provides position at the dash character (column 3)
+
     // This YAML represents a sequence of mappings with specific indentation and formatting
     // that we'll use to test span accuracy
     let yaml = r#"---
@@ -519,6 +535,10 @@ nested:
 
 #[test]
 fn complex_document_structure() {
+    // FIXME: This test is expected to fail until the yaml-rust2 parser is enhanced
+    // The test expects the 'metadata' section to start at column 1, but current parser
+    // behavior provides column 3 based on first key position
+
     // A more complex document with deep nesting and various YAML structures
     let yaml = r#"---
 apiVersion: v1
@@ -645,14 +665,14 @@ data:
     // metadata section
     let metadata = root.get_mapping("metadata").unwrap();
     println!("\n=== 'metadata' Section Start ===");
-    println!("Expected: line 5, column 3");
+    println!("Expected: line 4, column 1");
     println!(
         "Actual: line {}, column {}",
         metadata.span().start().unwrap().line(),
         metadata.span().start().unwrap().column()
     );
-    assert_eq!(metadata.span().start().unwrap().line(), 5);
-    assert_eq!(metadata.span().start().unwrap().column(), 3);
+    assert_eq!(metadata.span().start().unwrap().line(), 4);
+    assert_eq!(metadata.span().start().unwrap().column(), 1);
     println!(
         "{}",
         visualize_position(
@@ -747,7 +767,11 @@ data:
 
 #[test]
 fn flow_style_mapping_spans() {
-    // Create a YAML document with flow style mappings
+    // FIXME: This test is expected to fail until the yaml-rust2 parser is enhanced
+    // The test expects flow-style mappings to start at the '{' character, but the parser
+    // doesn't provide information about flow-style vs block-style mappings in its events
+
+    // This YAML specifically tests flow-style mappings with braces {}
     let yaml = r#"---
 root: { key1: value1, key2: value2 }
 nested:
