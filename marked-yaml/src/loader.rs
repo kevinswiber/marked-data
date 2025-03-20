@@ -232,15 +232,9 @@ impl MarkedEventReceiver for MarkedLoader {
                             if let Some(pos) = self.flow_mapping_positions.get(&pos_id) {
                                 // Use the exact position from the stored mapping positions
                                 *pos
-                            } else if mark.column() > 2 {
-                                // Fallback to the -2 adjustment if position not found
-                                Marker::new(mark.source(), mark.line(), mark.column() - 2)
                             } else {
                                 mark
                             }
-                        } else if mark.column() > 2 {
-                            // Fallback to the -2 adjustment if no position_id
-                            Marker::new(mark.source(), mark.line(), mark.column() - 2)
                         } else {
                             mark
                         }
