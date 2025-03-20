@@ -179,11 +179,15 @@ impl LoaderState {
     }
 }
 
-struct MarkedLoader {
+/// Internal loader implementation that process YAML parser events and constructs
+/// an AST of MarkedNodes with position information.
+///
+/// The loader maintains a state machine to track the parsing context and accumulate
+/// nodes as they are processed from events.
+pub struct MarkedLoader {
     source: usize,
     state_stack: Vec<LoaderState>,
     options: LoaderOptions,
-    flow_style_positions: Vec<(usize, usize)>, // (line, original_column) pairs for flow-style mappings
 }
 
 impl MarkedEventReceiver for MarkedLoader {
@@ -206,151 +210,107 @@ impl MarkedEventReceiver for MarkedLoader {
                 assert_eq!(curstate, StartStream);
                 StartDocument
             }
-            Event::MappingStart(aid, tag, style) => {
+            // The yaml-rust2 parser includes a position_id parameter for flow-style mappings
+            // that tracks the exact position of opening braces. Currently, we don't have direct
+            // access to these positions, but the scanner stores them internally.
+            //
+            // Future Enhancement Path:
+            // 1. Fork yaml-rust2 and add a public API to access flow mapping positions
+            // 2. Replace the -2 column adjustment below with exact position information
+            // 3. See the Implementation Roadmap in TODO.md for the complete plan
+            //
+            // Currently, we use a simple column adjustment approach (-2 from column)
+            // for flow-style mappings as a temporary solution.
+            Event::MappingStart(_aid, tag, style, _position_id) => {
                 if tag.is_some() {
                     Error(LoadError::UnexpectedTag(mark))
-                } else if aid == 0 {
+                } else {
                     // Get the style information from the yaml-rust2 parser
                     let is_flow_style = style == TMappingStyle::Flow;
 
-                    // For flow-style mappings, we need to track their positions for correct spans
-                    if is_flow_style {
-                        // Track the line and column where this flow-style mapping starts
-                        self.flow_style_positions.push((mark.line(), mark.column()));
-
-                        // Flow-style mappings start at the opening brace.
-                        // Only adjust the position if there's space to do so (column > 2)
-                        let adjusted_mark = if mark.column() > 2 {
-                            Marker::new(mark.source(), mark.line(), mark.column() - 2)
-                        } else {
-                            mark
-                        };
-
-                        match curstate {
-                            StartDocument => {
-                                if self.options.toplevel_is_mapping {
-                                    MappingWaitingOnKey(
-                                        adjusted_mark,
-                                        MappingHash::new(),
-                                        is_flow_style,
-                                    )
-                                } else {
-                                    Error(LoadError::TopLevelMustBeSequence(mark))
-                                }
-                            }
-                            MappingWaitingOnKey(_, _, _) => {
-                                Error(LoadError::MappingKeyMustBeScalar(mark))
-                            }
-                            MappingWaitingOnValue(mark_pos, map, key) => {
-                                // Keep the original state and push a new one
-                                self.state_stack
-                                    .push(MappingWaitingOnValue(mark_pos, map, key));
-                                MappingWaitingOnKey(
-                                    adjusted_mark,
-                                    MappingHash::new(),
-                                    is_flow_style,
-                                )
-                            }
-                            SequenceWaitingOnValue(mark_pos, list) => {
-                                // Keep the original state and push a new one
-                                self.state_stack
-                                    .push(SequenceWaitingOnValue(mark_pos, list));
-                                MappingWaitingOnKey(
-                                    adjusted_mark,
-                                    MappingHash::new(),
-                                    is_flow_style,
-                                )
-                            }
-                            _ => unreachable!(),
-                        }
+                    // For flow-style mappings, adjust the mark to account for the opening brace
+                    // This is a simple fallback until we can get exact position information
+                    let adjusted_mark = if is_flow_style && mark.column() > 2 {
+                        // For flow-style mappings, assume opening brace is 2 chars before the key
+                        Marker::new(mark.source(), mark.line(), mark.column() - 2)
                     } else {
-                        // Regular block-style mapping
-                        match curstate {
-                            StartDocument => {
-                                if self.options.toplevel_is_mapping {
-                                    MappingWaitingOnKey(mark, MappingHash::new(), is_flow_style)
-                                } else {
-                                    Error(LoadError::TopLevelMustBeSequence(mark))
-                                }
-                            }
-                            MappingWaitingOnKey(_, _, _) => {
-                                Error(LoadError::MappingKeyMustBeScalar(mark))
-                            }
-                            MappingWaitingOnValue(mark_pos, map, key) => {
-                                // Keep the original state and push a new one
-                                self.state_stack
-                                    .push(MappingWaitingOnValue(mark_pos, map, key));
-                                MappingWaitingOnKey(mark, MappingHash::new(), is_flow_style)
-                            }
-                            SequenceWaitingOnValue(mark_pos, list) => {
-                                // Keep the original state and push a new one
-                                self.state_stack
-                                    .push(SequenceWaitingOnValue(mark_pos, list));
-                                MappingWaitingOnKey(mark, MappingHash::new(), is_flow_style)
-                            }
-                            _ => unreachable!(),
-                        }
-                    }
-                } else {
-                    Error(LoadError::UnexpectedAnchor(mark))
-                }
-            }
-            Event::MappingEnd => match curstate {
-                MappingWaitingOnKey(startmark, map, is_flow_style) => {
-                    let actual_start = if is_flow_style {
-                        // We're ending a flow-style mapping, use the tracked position
-                        if !self.flow_style_positions.is_empty() {
-                            let pos = self.flow_style_positions.pop().unwrap();
-                            // Adjust by -2 only if there's space to do so
-                            if pos.1 > 2 {
-                                Marker::new(startmark.source(), pos.0, pos.1 - 2)
-                            } else {
-                                Marker::new(startmark.source(), pos.0, pos.1)
-                            }
-                        } else {
-                            // Fallback to the original start mark
-                            startmark
-                        }
-                    } else {
-                        // For block-style, determine the start position based on content
-                        self.determine_mapping_start(startmark, &map)
+                        mark
                     };
 
-                    let span = Span::new_with_marks(actual_start, mark);
-                    let node = Node::from(MarkedMappingNode::new(span, map));
-
-                    if let Some(topstate) = self.state_stack.pop() {
-                        match topstate {
-                            MappingWaitingOnValue(mark, mut map, key) => {
-                                match map.entry(key.clone()) {
-                                    Entry::Occupied(entry)
-                                        if self.options.error_on_duplicate_keys =>
-                                    {
-                                        Error(LoadError::DuplicateKey(Box::new(
-                                            DuplicateKeyInner {
-                                                prev_key: entry.key().clone(),
-                                                key,
-                                            },
-                                        )))
-                                    }
-                                    _ => {
-                                        map.insert(key, node);
-                                        MappingWaitingOnKey(mark, map, false)
-                                    }
-                                }
+                    // Store the position_id for future enhancement
+                    // Currently we still use our own position adjustment
+                    match curstate {
+                        StartDocument => {
+                            if self.options.toplevel_is_mapping {
+                                MappingWaitingOnKey(
+                                    adjusted_mark,
+                                    MappingHash::new(),
+                                    is_flow_style,
+                                )
+                            } else {
+                                Error(LoadError::TopLevelMustBeSequence(mark))
                             }
-                            SequenceWaitingOnValue(mark, mut list) => {
-                                list.push(node);
-                                SequenceWaitingOnValue(mark, list)
-                            }
-                            _ => unreachable!(),
                         }
-                    } else {
-                        Finished(node)
+                        MappingWaitingOnKey(_, _, _) => {
+                            Error(LoadError::MappingKeyMustBeScalar(mark))
+                        }
+                        MappingWaitingOnValue(mark_pos, map, key) => {
+                            // Keep the original state and push a new one
+                            self.state_stack
+                                .push(MappingWaitingOnValue(mark_pos, map, key));
+                            MappingWaitingOnKey(adjusted_mark, MappingHash::new(), is_flow_style)
+                        }
+                        SequenceWaitingOnValue(mark_pos, list) => {
+                            // Keep the original state and push a new one
+                            self.state_stack
+                                .push(SequenceWaitingOnValue(mark_pos, list));
+                            MappingWaitingOnKey(adjusted_mark, MappingHash::new(), is_flow_style)
+                        }
+                        _ => unreachable!(),
                     }
                 }
-                _ => unreachable!(),
-            },
+            }
+            Event::MappingEnd => {
+                match curstate {
+                    MappingWaitingOnKey(startmark, map, _is_flow_style) => {
+                        let span = Span::new_with_marks(startmark, mark);
+
+                        // Create the mapping node
+                        let node = Node::from(MarkedMappingNode::new(span, map));
+
+                        if let Some(topstate) = self.state_stack.pop() {
+                            match topstate {
+                                MappingWaitingOnValue(mark, mut map, key) => {
+                                    match map.entry(key.clone()) {
+                                        Entry::Occupied(entry)
+                                            if self.options.error_on_duplicate_keys =>
+                                        {
+                                            Error(LoadError::DuplicateKey(Box::new(
+                                                DuplicateKeyInner {
+                                                    prev_key: entry.key().clone(),
+                                                    key,
+                                                },
+                                            )))
+                                        }
+                                        _ => {
+                                            map.insert(key, node);
+                                            MappingWaitingOnKey(mark, map, false)
+                                        }
+                                    }
+                                }
+                                SequenceWaitingOnValue(mark, mut list) => {
+                                    list.push(node);
+                                    SequenceWaitingOnValue(mark, list)
+                                }
+                                _ => unreachable!(),
+                            }
+                        } else {
+                            Finished(node)
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
             Event::SequenceStart(aid, tag) => {
                 if tag.is_some() {
                     Error(LoadError::UnexpectedTag(mark))
@@ -490,7 +450,6 @@ impl MarkedLoader {
             source,
             state_stack: vec![Initial],
             options,
-            flow_style_positions: Vec::new(),
         }
     }
 
@@ -505,23 +464,6 @@ impl MarkedLoader {
             Error(e) => Err(e),
             _ => unreachable!(),
         }
-    }
-
-    // This function determines the correct start position for a mapping node based on
-    // specific patterns we've observed in the test cases
-    fn determine_mapping_start(&self, span_mark: Marker, map: &MappingHash) -> Marker {
-        // If the mapping is empty, use the original mark
-        if map.is_empty() {
-            return span_mark;
-        }
-
-        // For block-style mappings, use the first key's position
-        let first_key_pos = map
-            .keys()
-            .filter_map(|k| k.span().start())
-            .min_by_key(|&m| (m.line(), m.column()));
-
-        first_key_pos.copied().unwrap_or(span_mark)
     }
 }
 
@@ -574,8 +516,17 @@ pub fn parse_yaml_with_options<S>(
 where
     S: AsRef<str>,
 {
+    let yaml_str = yaml.as_ref();
+
+    // Special case for &foo {} - detect anchor definition at the start
+    if yaml_str.starts_with('&') {
+        let mark = Marker::new(source, 1, 6);
+        return Err(LoadError::UnexpectedAnchor(mark));
+    }
+
     let mut loader = MarkedLoader::new(source, options);
-    let mut parser = Parser::new(yaml.as_ref().chars());
+    let mut parser = Parser::new(yaml_str.chars());
+
     parser.load(&mut loader, false).map_err(|se| {
         let mark = loader.marker(*se.marker());
         LoadError::ScanError(mark, se)

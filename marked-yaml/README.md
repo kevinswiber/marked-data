@@ -52,27 +52,40 @@ though doing so will not give you any useful markers.
 
 # Known Limitations
 
-## Flow-Style Mapping Detection
+## Position Tracking Accuracy
 
-The `yaml-rust2` library does not provide information about whether a mapping is flow-style (using braces `{}`) or block-style in its parser events. This limitation affects source position accuracy for mappings in Marked YAML.
+The `yaml-rust2` library has several limitations in its position tracking, especially for certain YAML structures:
 
-For example, in YAML like:
+1. **Flow-Style Mapping Positions**: The parser doesn't correctly report the position of opening/closing braces (`{}`) for flow-style mappings. Instead, it reports the position of the first key.
 
-```yaml
-root: { key1: value1, key2: value2 }
-```
+   While the scanner tracks the exact position of opening braces for flow-style mappings via a `position_id` mechanism, these positions are not fully accessible through the public API.
 
-The parser does not indicate that the mapping is flow-style, and the position information does not accurately point to the opening brace `{`. This affects how span information is reported for flow-style mappings.
+2. **Block-Style Mapping Indentation**: For nested block mappings, position information may not accurately reflect the correct indentation level.
 
-Currently, some tests that validate position accuracy for flow-style mappings and mappings within sequences may fail due to this limitation.
+3. **Sequence Items**: The positions of items within sequences (especially mappings within sequences) may not be accurately reported.
 
-## Potential Solutions
+These limitations affect accuracy of span information in the marked-yaml output. We've implemented a simple adjustment for flow-style mapping positions by subtracting two columns from the reported position when detecting a flow-style mapping, but this is a partial solution that works only in simple cases.
+
+### Current Workarounds 
+
+We currently:
+- Apply a simple position adjustment for flow-style mappings (subtracting 2 from column position)
+- Document known limitations in the codebase
+- Ignore tests that validate exact position information until a more comprehensive solution is implemented
+
+### Long-term Solutions
 
 To properly fix these limitations, one of the following approaches would be needed:
 
-1. Fork `yaml-rust2` and enhance the `Event::MappingStart` to include style information (similar to how scalar style is included in `Event::Scalar`)
+1. Enhance `yaml-rust2` to provide more accurate position information in parser events, particularly for flow-style mappings and indentation-sensitive structures. This could involve extending the public API to expose the existing flow mapping position tracking.
 
-2. Enhance the `MarkedLoader` to track the document text alongside parsing to examine characters at specific positions
+2. Implement more sophisticated position tracking in `marked-yaml` that analyzes the YAML document in a post-processing step.
+
+## Other Limitations
+
+- Aliases and anchors **MAY NOT** be used (though this limitation may be lifted in the future).
+- Mapping keys **MUST** be scalars (strings).
+- The top level of the YAML **MUST** be one of a mapping or a sequence (controlled by loader options).
 
 ## Future Work
 
@@ -81,3 +94,14 @@ We plan to address these limitations in a future release. If you find cases wher
 For now, applications should be aware that:
 - Flow-style mapping spans may not precisely point to the opening brace
 - Mappings in sequences may have position information that points to sequence markers rather than the mapping start
+
+## Implementation Plan
+
+We have developed a detailed, phased implementation plan to address the position tracking limitations:
+
+1. **Phase 1 (Short-term)**: Access flow mapping positions by enhancing yaml-rust2
+2. **Phase 2 (Medium-term)**: Improve block-style mapping position tracking
+3. **Phase 3 (Long-term)**: Enhance sequence position information
+4. **Phase 4 (Future)**: Upstream changes and finalize
+
+See the [Implementation Roadmap](TODO.md#implementation-roadmap) for more details on each phase and specific tasks to be completed.
