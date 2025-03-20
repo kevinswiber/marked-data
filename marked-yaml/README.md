@@ -54,32 +54,35 @@ though doing so will not give you any useful markers.
 
 ## Position Tracking Accuracy
 
-The `yaml-rust2` library has several limitations in its position tracking, especially for certain YAML structures:
+The `marked-yaml` library now provides accurate position tracking for most YAML structures. Previously, there were limitations in the position tracking due to implementation details in the `yaml-rust2` library, but these issues have been resolved:
 
-1. **Flow-Style Mapping Positions**: The parser doesn't correctly report the position of opening/closing braces (`{}`) for flow-style mappings. Instead, it reports the position of the first key.
+1. **Flow-Style Mapping Positions**: The library now correctly reports the position of opening/closing braces (`{}`) for flow-style mappings, pointing to the exact position of the opening brace.
 
-   While the scanner tracks the exact position of opening braces for flow-style mappings via a `position_id` mechanism, these positions are not fully accessible through the public API.
+2. **Block-Style Mapping Indentation**: Block mappings now report their position as the position of their first key, which matches standard YAML parsing expectations.
 
-2. **Block-Style Mapping Indentation**: For nested block mappings, position information may not accurately reflect the correct indentation level.
+3. **Sequence Items**: The positions of items within sequences are now accurately reported, including mappings within sequences.
 
-3. **Sequence Items**: The positions of items within sequences (especially mappings within sequences) may not be accurately reported.
+These improvements enhance the accuracy of span information in the marked-yaml output, making it more useful for applications that rely on precise source positions, such as error reporting, document validation, or source-to-source transformations.
 
-These limitations affect accuracy of span information in the marked-yaml output. We've implemented a simple adjustment for flow-style mapping positions by subtracting two columns from the reported position when detecting a flow-style mapping, but this is a partial solution that works only in simple cases.
+### Implementation Details
 
-### Current Workarounds 
+We've implemented several enhancements to make position tracking accurate:
 
-We currently:
-- Apply a simple position adjustment for flow-style mappings (subtracting 2 from column position)
-- Document known limitations in the codebase
-- Ignore tests that validate exact position information until a more comprehensive solution is implemented
+1. For flow-style mappings, we use the position ID mechanism provided by the scanner to get the exact position of opening braces.
 
-### Long-term Solutions
+2. For block-style mappings, we adjust the reported position to point to the first key in the mapping.
 
-To properly fix these limitations, one of the following approaches would be needed:
+3. For sequence items, we properly track the position of each item based on its type and context.
 
-1. Enhance `yaml-rust2` to provide more accurate position information in parser events, particularly for flow-style mappings and indentation-sensitive structures. This could involve extending the public API to expose the existing flow mapping position tracking.
+### Future Enhancements
 
-2. Implement more sophisticated position tracking in `marked-yaml` that analyzes the YAML document in a post-processing step.
+While all tests are now passing, we continue to look for ways to improve position tracking. Some areas for future enhancement include:
+
+1. Upstream changes to `yaml-rust2` to make position tracking more robust at the parser level.
+
+2. More sophisticated handling of edge cases in complex nested structures.
+
+3. Additional test cases for complex YAML documents with varied styles and nesting levels.
 
 ## Other Limitations
 
@@ -97,11 +100,25 @@ For now, applications should be aware that:
 
 ## Implementation Plan
 
-We have developed a detailed, phased implementation plan to address the position tracking limitations:
+We've successfully implemented our roadmap for improving position tracking:
 
-1. **Phase 1 (Short-term)**: Access flow mapping positions by enhancing yaml-rust2
-2. **Phase 2 (Medium-term)**: Improve block-style mapping position tracking
-3. **Phase 3 (Long-term)**: Enhance sequence position information
-4. **Phase 4 (Future)**: Upstream changes and finalize
+## ✅ Phase 1: Flow-Style Mapping Position Tracking
+- The marked-yaml library now correctly reports positions for flow-style mappings
+- Flow mapping opening braces are precisely tracked
+- All related tests are now passing
 
-See the [Implementation Roadmap](TODO.md#implementation-roadmap) for more details on each phase and specific tasks to be completed.
+## ✅ Phase 2: Block-Style Mapping Position Tracking
+- Block mappings now have their positions correctly reported as the position of their first key
+- Nested block mappings maintain proper position information
+- All related tests are now passing
+
+## ✅ Phase 3: Sequence Position Improvements
+- Sequence items now have their positions correctly tracked
+- Mappings within sequences maintain proper position information
+- All related tests are now passing
+
+## ✅ Phase 4: Complex Document Structure Support
+- Complex nested YAML structures now have accurate position tracking
+- All tests are now passing, including the previously ignored tests
+
+See the [Implementation Status](TODO.md) document for more details on the completed work and future plans.
