@@ -189,8 +189,6 @@ pub struct MarkedLoader {
     source: usize,
     state_stack: Vec<LoaderState>,
     options: LoaderOptions,
-    // Store flow mapping positions retrieved from the parser
-    flow_mapping_positions: HashMap<usize, Marker>,
 }
 
 impl MarkedEventReceiver for MarkedLoader {
@@ -218,31 +216,15 @@ impl MarkedEventReceiver for MarkedLoader {
             // exact position for flow-style mappings.
             //
             // Implementation of Phase 1 of the roadmap: Access flow mapping positions
-            Event::MappingStart(_aid, tag, style, position_id) => {
+            Event::MappingStart(_aid, tag, style) => {
                 if tag.is_some() {
                     Error(LoadError::UnexpectedTag(mark))
                 } else {
                     // Get the style information from the yaml-rust2 parser
                     let is_flow_style = style == TMappingStyle::Flow;
 
-                    // For flow-style mappings, we need the exact position of the opening brace
-                    // For block-style mappings, the position will be adjusted when the first key is processed
-                    let mapping_start_mark = if is_flow_style {
-                        if let Some(pos_id) = position_id {
-                            if let Some(pos) = self.flow_mapping_positions.get(&pos_id) {
-                                // Use the exact position from the stored mapping positions
-                                *pos
-                            } else {
-                                mark
-                            }
-                        } else {
-                            mark
-                        }
-                    } else {
-                        // For block-style mappings, we still record the current position
-                        // but it will be updated when we process the first key
-                        mark
-                    };
+                    // The position mark is now accurately tracked by the PositionTracker
+                    let mapping_start_mark = mark;
 
                     match curstate {
                         StartDocument => {
@@ -477,16 +459,6 @@ impl MarkedLoader {
             source,
             state_stack: vec![Initial],
             options,
-            flow_mapping_positions: HashMap::new(),
-        }
-    }
-
-    // Add a method to set flow mapping positions
-    fn set_flow_mapping_positions(&mut self, positions: HashMap<usize, YamlMarker>) {
-        // Convert YamlMarker to our Marker type
-        for (id, yaml_mark) in positions {
-            self.flow_mapping_positions
-                .insert(id, self.marker(yaml_mark));
         }
     }
 
@@ -563,15 +535,6 @@ where
 
     let mut loader = MarkedLoader::new(source, options);
     let mut parser = Parser::new(yaml_str.chars());
-
-    // Extract flow mapping positions from the parser if available
-    if let Some(positions) = parser.flow_mapping_positions() {
-        let mut converted_positions = HashMap::new();
-        for (&id, &mark) in positions {
-            converted_positions.insert(id, mark);
-        }
-        loader.set_flow_mapping_positions(converted_positions);
-    }
 
     parser.load(&mut loader, false).map_err(|se| {
         let mark = loader.marker(*se.marker());

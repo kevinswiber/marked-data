@@ -805,18 +805,17 @@ sequence_flow: [1, 2, { key: value }]
     // Check the root flow-style mapping
     let flow_mapping = root.get_mapping("root").unwrap();
     println!("\n=== Flow Mapping Start ===");
-    println!("Expected: line 2, column 5"); // After 'root: ' is the opening '{' character at column 5
+    println!("Expected: line 2, column 7"); // After 'root: ' is the opening '{' character at column 7
     println!(
         "Actual: line {}, column {}",
         flow_mapping.span().start().unwrap().line(),
         flow_mapping.span().start().unwrap().column()
     );
 
-    // With our position tracking improvements, we can now get accurate positions
-    // The YAML parser correctly reports column 5 (0-indexed in scanner, 1-indexed in our API)
-    // As this is the correct position of the opening '{' in "root: { key1:"
+    // With our updated position tracking, the position is now correctly reported as column 7
+    // This is the position of the opening '{' in "root: { key1:"
     assert_eq!(flow_mapping.span().start().unwrap().line(), 2);
-    assert_eq!(flow_mapping.span().start().unwrap().column(), 5);
+    assert_eq!(flow_mapping.span().start().unwrap().column(), 7);
 
     println!(
         "{}",
@@ -860,14 +859,14 @@ sequence_flow: [1, 2, { key: value }]
     let nested = root.get_mapping("nested").unwrap();
     let level1 = nested.get_mapping("level1").unwrap();
     println!("\n=== 'level1' Flow Mapping Start ===");
-    println!("Expected: line 4, column 9"); // Position of the opening '{' character after "level1: "
+    println!("Expected: line 4, column 11"); // Position of the opening '{' character after "level1: "
     println!(
         "Actual: line {}, column {}",
         level1.span().start().unwrap().line(),
         level1.span().start().unwrap().column()
     );
     assert_eq!(level1.span().start().unwrap().line(), 4);
-    assert_eq!(level1.span().start().unwrap().column(), 9);
+    assert_eq!(level1.span().start().unwrap().column(), 11);
 
     // Check the end position of the level1 flow mapping
     println!("\n=== 'level1' Flow Mapping End ===");
@@ -892,14 +891,14 @@ sequence_flow: [1, 2, { key: value }]
     let level2 = nested.get_mapping("level2").unwrap();
     let deep = level2.get_mapping("deep").unwrap();
     println!("\n=== 'deep' Flow Mapping Start ===");
-    println!("Expected: line 6, column 9"); // Position of the opening '{' character after "deep: "
+    println!("Expected: line 6, column 11"); // Position of the opening '{' character after "deep: "
     println!(
         "Actual: line {}, column {}",
         deep.span().start().unwrap().line(),
         deep.span().start().unwrap().column()
     );
     assert_eq!(deep.span().start().unwrap().line(), 6);
-    assert_eq!(deep.span().start().unwrap().column(), 9);
+    assert_eq!(deep.span().start().unwrap().column(), 11);
     println!(
         "{}",
         visualize_position(
@@ -912,14 +911,14 @@ sequence_flow: [1, 2, { key: value }]
     // Check nested mapping inside deep flow mapping
     let b = deep.get_mapping("b").unwrap();
     println!("\n=== 'b' Flow Mapping Start ===");
-    println!("Expected: line 6, column 20"); // Position of the opening '{' character after "b: "
+    println!("Expected: line 6, column 22"); // Position of the opening '{' character after "b: "
     println!(
         "Actual: line {}, column {}",
         b.span().start().unwrap().line(),
         b.span().start().unwrap().column()
     );
     assert_eq!(b.span().start().unwrap().line(), 6);
-    assert_eq!(b.span().start().unwrap().column(), 20);
+    assert_eq!(b.span().start().unwrap().column(), 22);
     println!(
         "{}",
         visualize_position(
@@ -971,14 +970,14 @@ sequence_flow: [1, 2, { key: value }]
     // Check mapping inside flow sequence
     let sequence_mapping = sequence_flow.get_mapping(2).unwrap();
     println!("\n=== Mapping in Flow Sequence Start ===");
-    println!("Expected: line 7, column 21"); // Position of the opening '{' character
+    println!("Expected: line 7, column 23"); // Position of the opening '{' character
     println!(
         "Actual: line {}, column {}",
         sequence_mapping.span().start().unwrap().line(),
         sequence_mapping.span().start().unwrap().column()
     );
     assert_eq!(sequence_mapping.span().start().unwrap().line(), 7);
-    assert_eq!(sequence_mapping.span().start().unwrap().column(), 21);
+    assert_eq!(sequence_mapping.span().start().unwrap().column(), 23);
     println!(
         "{}",
         visualize_position(
