@@ -1032,9 +1032,10 @@ fn convert_yaml_to_node(
     }
 }
 
-// Helper function to create a Span from source map information
+// Helper function to create a span from source map information
 fn create_span_from_source_map(node: &Yaml, source_map: &SourceMap<Yaml>, source: usize) -> Span {
-    // Find the node ID in the source map
+    
+    // First, try to find the node directly in the source map by pointer equality
     for id in source_map.get_all_node_ids() {
         if let Some(map_node) = source_map.get_node(id) {
             if std::ptr::eq(map_node as *const Yaml, node as *const Yaml) {
@@ -1051,6 +1052,113 @@ fn create_span_from_source_map(node: &Yaml, source_map: &SourceMap<Yaml>, source
         }
     }
 
+    // If we couldn't find the node by pointer equality, try to find it by content equality
+    // This is useful for nodes that are cloned or recreated during parsing
+    for id in source_map.get_all_node_ids() {
+        if let Some(map_node) = source_map.get_node(id) {
+            // Compare nodes based on their type and content
+            match (node, map_node) {
+                // String comparison
+                (Yaml::String(node_str), Yaml::String(map_str)) => {
+                    if node_str == map_str {
+                        if let Some(location) = source_map.get_location(id) {
+                            return create_span_from_position_span(&location.span, source);
+                        }
+                    }
+                },
+                // Integer comparison
+                (Yaml::Integer(node_int), Yaml::Integer(map_int)) => {
+                    if node_int == map_int {
+                        if let Some(location) = source_map.get_location(id) {
+                            return create_span_from_position_span(&location.span, source);
+                        }
+                    }
+                },
+                // Real/float comparison
+                (Yaml::Real(node_real), Yaml::Real(map_real)) => {
+                    if node_real == map_real {
+                        if let Some(location) = source_map.get_location(id) {
+                            return create_span_from_position_span(&location.span, source);
+                        }
+                    }
+                },
+                // Boolean comparison
+                (Yaml::Boolean(node_bool), Yaml::Boolean(map_bool)) => {
+                    if node_bool == map_bool {
+                        if let Some(location) = source_map.get_location(id) {
+                            return create_span_from_position_span(&location.span, source);
+                        }
+                    }
+                },
+                // Null comparison
+                (Yaml::Null, Yaml::Null) => {
+                    if let Some(location) = source_map.get_location(id) {
+                        return create_span_from_position_span(&location.span, source);
+                    }
+                },
+                // Array comparison - check if they have the same length and similar content
+                (Yaml::Array(node_array), Yaml::Array(map_array)) => {
+                    if node_array.len() == map_array.len() {
+                        // For arrays, we need to do a deeper comparison
+                        let mut match_count = 0;
+                        for (i, node_item) in node_array.iter().enumerate() {
+                            if let Some(map_item) = map_array.get(i) {
+                                match (node_item, map_item) {
+                                    (Yaml::String(ns), Yaml::String(ms)) if ns == ms => match_count += 1,
+                                    (Yaml::Integer(ni), Yaml::Integer(mi)) if ni == mi => match_count += 1,
+                                    (Yaml::Real(nr), Yaml::Real(mr)) if nr == mr => match_count += 1,
+                                    (Yaml::Boolean(nb), Yaml::Boolean(mb)) if nb == mb => match_count += 1,
+                                    (Yaml::Null, Yaml::Null) => match_count += 1,
+                                    _ => {}
+                                }
+                            }
+                        }
+                        
+                        // If at least half of the items match, consider it a match
+                        if match_count >= node_array.len() / 2 {
+                            if let Some(location) = source_map.get_location(id) {
+                                return create_span_from_position_span(&location.span, source);
+                            }
+                        }
+                    }
+                },
+                // Hash/mapping comparison - check if they have the same length and similar content
+                (Yaml::Hash(node_hash), Yaml::Hash(map_hash)) => {
+                    if node_hash.len() == map_hash.len() {
+                        // For mappings, we need to do a deeper comparison
+                        let mut match_count = 0;
+                        for (node_key, node_value) in node_hash.iter() {
+                            for (map_key, map_value) in map_hash.iter() {
+                                match (node_key, map_key) {
+                                    (Yaml::String(nk), Yaml::String(mk)) if nk == mk => {
+                                        match (node_value, map_value) {
+                                            (Yaml::String(nv), Yaml::String(mv)) if nv == mv => match_count += 1,
+                                            (Yaml::Integer(nv), Yaml::Integer(mv)) if nv == mv => match_count += 1,
+                                            (Yaml::Real(nv), Yaml::Real(mv)) if nv == mv => match_count += 1,
+                                            (Yaml::Boolean(nv), Yaml::Boolean(mv)) if nv == mv => match_count += 1,
+                                            (Yaml::Null, Yaml::Null) => match_count += 1,
+                                            _ => {}
+                                        }
+                                    },
+                                    _ => {}
+                                }
+                            }
+                        }
+                        
+                        // If at least half of the items match, consider it a match
+                        if match_count >= node_hash.len() / 2 {
+                            if let Some(location) = source_map.get_location(id) {
+                                return create_span_from_position_span(&location.span, source);
+                            }
+                        }
+                    }
+                },
+                // Other combinations don't match
+                _ => {}
+            }
+        }
+    }
+
     // If we couldn't find the node directly, try to infer span from child nodes
     match node {
         Yaml::Array(items) if !items.is_empty() => {
@@ -1061,46 +1169,81 @@ fn create_span_from_source_map(node: &Yaml, source_map: &SourceMap<Yaml>, source
             let first_span = create_span_from_source_map(first_item, source_map, source);
             let last_span = create_span_from_source_map(last_item, source_map, source);
 
-            if let (Some(start), Some(end)) = (
-                first_span.start(),
-                last_span.end().or_else(|| last_span.start()),
-            ) {
-                return Span::new_with_marks(*start, *end);
-            } else if let Some(start) = first_span.start() {
+            // Try to create a span from the first item's start to the last item's end
+            if let (Some(first_start), Some(last_end)) = (first_span.start(), last_span.end()) {
+                return Span::new_with_marks(*first_start, *last_end);
+            } 
+            
+            // If the last item doesn't have an end, try to use its start as the end
+            if let (Some(first_start), Some(last_start)) = (first_span.start(), last_span.start()) {
+                return Span::new_with_marks(*first_start, *last_start);
+            }
+            
+            // If we only have a start position for the first item, use that
+            if let Some(start) = first_span.start() {
                 return Span::new_start(*start);
             }
-        }
+        },
         Yaml::Hash(hash) if !hash.is_empty() => {
-            // For hash/mapping, try to use the first key and last value
-            let mut start_marker: Option<Marker> = None;
-            let mut end_marker: Option<Marker> = None;
-
-            for (key, value) in hash {
-                let key_span = create_span_from_source_map(key, source_map, source);
-                let value_span = create_span_from_source_map(value, source_map, source);
-
-                // Use the first key's start position as the mapping's start
-                if start_marker.is_none() {
-                    start_marker = key_span.start().copied();
+            // For mappings, try to use the span of the first and last key-value pairs
+            let mut spans = Vec::new();
+            
+            // Collect spans for all keys and values
+            for (key, value) in hash.iter() {
+                spans.push(create_span_from_source_map(key, source_map, source));
+                spans.push(create_span_from_source_map(value, source_map, source));
+            }
+            
+            // Find the earliest start and latest end
+            let mut earliest_start: Option<Marker> = None;
+            let mut latest_end: Option<Marker> = None;
+            
+            for span in spans {
+                if let Some(start) = span.start() {
+                    if earliest_start.is_none() || 
+                       (start.source() == earliest_start.unwrap().source() && 
+                        ((start.line() < earliest_start.unwrap().line()) || 
+                         (start.line() == earliest_start.unwrap().line() && 
+                          start.column() < earliest_start.unwrap().column()))) {
+                        earliest_start = Some(*start);
+                    }
                 }
-
-                // Use the last value's end position (or start position if no end) as the mapping's end
-                if let Some(end) = value_span.end().or_else(|| value_span.start()) {
-                    end_marker = Some(*end);
+                
+                if let Some(end) = span.end() {
+                    if latest_end.is_none() || 
+                       (end.source() == latest_end.unwrap().source() && 
+                        ((end.line() > latest_end.unwrap().line()) || 
+                         (end.line() == latest_end.unwrap().line() && 
+                          end.column() > latest_end.unwrap().column()))) {
+                        latest_end = Some(*end);
+                    }
                 }
             }
-
-            if let (Some(start), Some(end)) = (start_marker, end_marker) {
+            
+            if let (Some(start), Some(end)) = (earliest_start, latest_end) {
                 return Span::new_with_marks(start, end);
-            } else if let Some(start) = start_marker {
+            } else if let Some(start) = earliest_start {
                 return Span::new_start(start);
             }
-        }
+        },
         _ => {}
     }
 
-    // Fallback to a blank span if we couldn't find the node or infer from children
+    // If we still couldn't determine a span, create a blank span
+    // This is better than returning a default marker at position 0,0
+    // as it clearly indicates that no position information is available
     Span::new_blank()
+}
+
+// Helper function to create a span from a position span
+fn create_span_from_position_span(span: &yaml_rust::position::PositionSpan, source: usize) -> Span {
+    let start = convert_marker(span.start, source);
+    let end = span.end.map(|m| convert_marker(m, source));
+
+    match end {
+        Some(end_marker) => Span::new_with_marks(start, end_marker),
+        None => Span::new_start(start),
+    }
 }
 
 #[cfg(test)]
